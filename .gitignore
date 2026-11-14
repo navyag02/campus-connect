@@ -1,0 +1,5 @@
+node_modules/
+*.tmp
+.env
+data/registrations.json
+data/users.json
