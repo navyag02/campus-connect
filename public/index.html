@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CampusConnect - College Event Portal</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/events"><span class="logo">CC</span> CampusConnect</a>
+  <nav>
+    <a href="#/events" data-nav="events">Events</a>
+    <a href="#/calendar" data-nav="calendar">Calendar</a>
+    <a href="#/my-events" data-nav="my-events">My Events</a>
+    <a href="#/add" data-nav="add">Add Event</a>
+  </nav>
+  <button id="themeToggle" class="icon-btn" aria-label="Toggle dark mode">🌙</button>
+</header>
+
+<main id="app"></main>
+
+<div id="modalRoot"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<footer class="footer">CampusConnect &middot; College Event Portal &middot; Built with HTML, CSS, JavaScript, Node.js &amp; Express</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
