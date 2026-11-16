@@ -3,7 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="CampusConnect: find college events, workshops and competitions, and register online.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2312142b'/%3E%3Ctext x='16' y='22' font-size='15' font-weight='800' text-anchor='middle' fill='white' font-family='Arial'%3ECC%3C/text%3E%3C/svg%3E">
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("cc_theme")||"light"}catch(e){}</script>
 <title>CampusConnect - College Event Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,7 +17,8 @@
   <nav id="mainNav">
     <a href="#/events" data-nav="events">Events</a>
     <a href="#/calendar" data-nav="calendar">Calendar</a>
-    <a href="#/add" data-nav="add">Add Event</a>
+    <a href="#/add" data-nav="add" id="addNav" hidden>Create event</a>
+    <a href="#/profile" id="wallet" class="wallet" hidden>My tickets<span class="wcount" hidden>0</span></a>
     <span id="authArea" class="auth-area"></span>
   </nav>
   <button id="themeToggle" class="icon-btn" aria-label="Toggle dark mode">🌙</button>
@@ -25,6 +31,7 @@
 
 <footer class="footer">CampusConnect &middot; College Event Portal &middot; Built with HTML, CSS, JavaScript, Node.js &amp; Express</footer>
 
+<script src="qr.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

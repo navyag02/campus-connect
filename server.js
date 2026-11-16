@@ -11,6 +11,8 @@ const EVENTS_FILE = path.join(DATA_DIR, 'events.json');
 const REG_FILE = path.join(DATA_DIR, 'registrations.json');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SECRET_FILE = path.join(DATA_DIR, '.secret');
+const EMOJIS = { Workshop: '🛠️', Competition: '🏆', Cultural: '🎭', Sports: '⚽', Seminar: '🎤' };
+const ROLES = ['student', 'organizer'];
 const CATEGORIES = ['Workshop', 'Competition', 'Cultural', 'Sports', 'Seminar'];
 
 app.use(express.json());
@@ -18,8 +20,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------- storage helpers ----------
 function readJSON(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
-  catch { return fallback; }
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8'); }
+  catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
+  // never silently treat a damaged file as empty: the next write would erase everyone's data
+  try { return JSON.parse(raw); }
+  catch { throw new Error(path.basename(file) + ' is damaged. Restore it before continuing; refusing to overwrite your data.'); }
 }
 function writeJSON(file, data) {
   // write to a temp file then rename, so a crash never leaves a half-written file
@@ -34,7 +40,8 @@ const getEvents = () => readJSON(EVENTS_FILE, []);
 const getRegs = () => readJSON(REG_FILE, []);
 const getUsers = () => readJSON(USERS_FILE, []);
 
-const isPast = ev => new Date(`${ev.date}T${ev.time}:00`) <= new Date();
+// event times are campus-local (IST) no matter where the server runs
+const isPast = ev => new Date(`${ev.date}T${ev.time}:00+05:30`) <= new Date();
 function withSeats(ev, regs) {
   const taken = regs.filter(r => r.eventId === ev.id && r.status === 'confirmed').length;
   return { ...ev, registered: taken, seatsLeft: Math.max(ev.capacity - taken, 0), past: isPast(ev) };
@@ -83,7 +90,11 @@ function parseCookies(header = '') {
   const out = {};
   header.split(';').forEach(part => {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i <= 0) return;
+    const raw = part.slice(i + 1).trim();
+    let val;
+    try { val = decodeURIComponent(raw); } catch { val = raw; }
+    out[part.slice(0, i).trim()] = val;
   });
   return out;
 }
@@ -100,10 +111,12 @@ function currentUser(req) {
 function requireAuth(req, res, next) {
   const user = currentUser(req);
   if (!user) return res.status(401).json({ error: 'Please log in to continue.' });
-  req.user = user;
+  req.user = { role: 'student', ...user }; // accounts made before roles existed count as students
   next();
 }
-const publicUser = ({ passHash, ...rest }) => rest;
+const requireOrganizer = (req, res, next) =>
+  req.user.role === 'organizer' ? next() : res.status(403).json({ error: 'Only organizer accounts can create events.' });
+const publicUser = ({ passHash, ...rest }) => ({ role: 'student', ...rest });
 
 // small in-memory rate limiter. Login: 10 FAILED tries per email+IP per 15 minutes (a shared
 // college Wi-Fi address must not lock everybody out). Signup: 50 per IP per 15 minutes.
@@ -119,16 +132,21 @@ function hit(key, max) {
 const blocked = (key, max) => { const b = buckets.get(key); return !!b && b.reset > Date.now() && b.count >= max; };
 
 // ---------- validation ----------
-function validateProfile(b) {
+function validateProfile(b, role = 'student') {
   const errors = {};
   const name = (b.name || '').trim();
-  const roll = (b.rollNo || '').trim().toUpperCase();
   const phone = (b.phone || '').trim();
+  if (!/^[A-Za-z][A-Za-z .'-]{1,59}$/.test(name)) errors.name = 'Enter a valid full name (letters only, 2-60 chars).';
+  if (!/^[6-9]\d{9}$/.test(phone)) errors.phone = 'Enter a valid 10-digit Indian mobile number.';
+  if (role === 'organizer') {
+    const organization = String(b.organization || '').trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9 &.,'()-]{1,59}$/.test(organization)) errors.organization = 'Enter your club, committee or department name.';
+    return { errors, clean: { name, phone, organization } };
+  }
+  const roll = (b.rollNo || '').trim().toUpperCase();
   const dept = (b.department || '').trim();
   const year = String(b.year || '').trim();
-  if (!/^[A-Za-z][A-Za-z .'-]{1,59}$/.test(name)) errors.name = 'Enter a valid full name (letters only, 2-60 chars).';
   if (!/^[A-Z0-9-]{5,15}$/.test(roll)) errors.rollNo = 'Roll number must be 5-15 letters/digits.';
-  if (!/^[6-9]\d{9}$/.test(phone)) errors.phone = 'Enter a valid 10-digit Indian mobile number.';
   if (!dept) errors.department = 'Select your department.';
   if (!['1', '2', '3', '4'].includes(year)) errors.year = 'Select your year of study.';
   return { errors, clean: { name, rollNo: roll, phone, department: dept, year } };
@@ -158,7 +176,8 @@ function validateEvent(b) {
 app.post('/api/auth/signup', (req, res) => {
   if (hit('signup|' + req.ip, 50)) return res.status(429).json({ error: 'Too many sign-ups from this network. Try again in a few minutes.' });
   const b = req.body || {};
-  const { errors, clean } = validateProfile(b);
+  const role = ROLES.includes(b.role) ? b.role : 'student';
+  const { errors, clean } = validateProfile(b, role);
   const email = String(b.email || '').trim().toLowerCase();
   if (!validEmail(email)) errors.email = 'Enter a valid email address.';
   if (!validPassword(b.password)) errors.password = 'Password must be 8+ characters with at least one letter and one number.';
@@ -168,7 +187,7 @@ app.post('/api/auth/signup', (req, res) => {
   if (users.some(u => u.email === email)) {
     return res.status(409).json({ error: 'An account with this email already exists.', errors: { email: 'An account with this email already exists.' } });
   }
-  const user = { id: 'u_' + crypto.randomBytes(4).toString('hex'), email, ...clean, passHash: hashPassword(b.password), createdAt: new Date().toISOString() };
+  const user = { id: 'u_' + crypto.randomBytes(4).toString('hex'), email, role, ...clean, passHash: hashPassword(b.password), createdAt: new Date().toISOString() };
   users.push(user);
   writeJSON(USERS_FILE, users);
   startSession(res, user);
@@ -197,7 +216,7 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 app.patch('/api/auth/me', requireAuth, (req, res) => {
-  const { errors, clean } = validateProfile(req.body || {});
+  const { errors, clean } = validateProfile(req.body || {}, req.user.role);
   if (Object.keys(errors).length) return res.status(400).json({ error: 'Validation failed', errors });
   const users = getUsers();
   const u = users.find(x => x.id === req.user.id);
@@ -213,7 +232,7 @@ app.get('/api/events', (req, res) => {
   let list = getEvents().map(e => withSeats(e, regs));
 
   if (q) {
-    const s = q.toLowerCase();
+    const s = String(Array.isArray(q) ? q[0] : q).toLowerCase();
     list = list.filter(e => [e.title, e.description, e.venue, e.organizer].join(' ').toLowerCase().includes(s));
   }
   if (category && category !== 'All') list = list.filter(e => e.category === category);
@@ -240,13 +259,13 @@ app.get('/api/events/:id', (req, res) => {
 });
 
 // ---------- EVENTS (logged-in: create, edit, delete, attendees) ----------
-app.post('/api/events', requireAuth, (req, res) => {
+app.post('/api/events', requireAuth, requireOrganizer, (req, res) => {
   const { errors, clean } = validateEvent(req.body || {});
   if (!errors.date && !errors.time && isPast(clean)) errors.date = 'Pick a date and time in the future.';
   if (Object.keys(errors).length) return res.status(400).json({ error: 'Validation failed', errors });
   const events = getEvents();
-  const emojis = { Workshop: '🛠️', Competition: '🏆', Cultural: '🎭', Sports: '⚽', Seminar: '🎤' };
-  const ev = { id: events.reduce((m, e) => Math.max(m, e.id), 0) + 1, ...clean, emoji: emojis[clean.category], ownerId: req.user.id, ownerName: req.user.name };
+  // ids are never reused, even after an event is deleted
+  const ev = { id: Math.max(0, ...events.map(e => e.id), ...getRegs().map(r => r.eventId)) + 1, ...clean, emoji: EMOJIS[clean.category], ownerId: req.user.id, ownerName: req.user.name };
   events.push(ev);
   writeJSON(EVENTS_FILE, events);
   res.status(201).json(withSeats(ev, getRegs()));
@@ -264,12 +283,16 @@ function ownedEvent(req, res) {
 app.patch('/api/events/:id', requireAuth, (req, res) => {
   const found = ownedEvent(req, res); if (!found) return;
   const { events, ev } = found;
+  if (isPast(ev)) return res.status(409).json({ error: 'Past events cannot be edited.' });
   const { errors, clean } = validateEvent(req.body || {});
+  if (!errors.date && !errors.time && isPast(clean)) errors.date = 'Pick a date and time in the future.';
   const regs = getRegs();
   const taken = withSeats(ev, regs).registered;
   if (!errors.capacity && clean.capacity < taken) errors.capacity = `Already ${taken} people registered; capacity cannot be lower.`;
   if (Object.keys(errors).length) return res.status(400).json({ error: 'Validation failed', errors });
+  const oldCategory = ev.category;
   Object.assign(ev, clean);
+  if (ev.emoji === EMOJIS[oldCategory]) ev.emoji = EMOJIS[ev.category]; // keep the icon in step with the category
   writeJSON(EVENTS_FILE, events);
   res.json(withSeats(ev, regs));
 });
@@ -293,6 +316,7 @@ app.get('/api/events/:id/attendees', requireAuth, (req, res) => {
 
 // ---------- REGISTRATION (logged-in) ----------
 app.post('/api/events/:id/register', requireAuth, (req, res) => {
+  if (req.user.role !== 'student') return res.status(403).json({ error: 'Organizer accounts manage events. Only student accounts can register.' });
   const ev = getEvents().find(e => e.id === Number(req.params.id));
   if (!ev) return res.status(404).json({ error: 'Event not found' });
 
@@ -351,6 +375,7 @@ function ownedRegistration(req, res) {
 app.get('/api/registrations/:id', requireAuth, (req, res) => {
   const found = ownedRegistration(req, res); if (!found) return;
   const ev = getEvents().find(e => e.id === found.reg.eventId);
+  if (!ev || found.reg.status !== 'confirmed') return res.status(404).json({ error: 'This ticket is no longer available.' });
   res.json({ registration: found.reg, event: withSeats(ev, found.regs) });
 });
 
@@ -370,5 +395,11 @@ app.get('/api/stats', (req, res) => {
 });
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Unknown API route' }));
+
+app.use((err, req, res, next) => {
+  const badBody = err.type === 'entity.parse.failed';
+  if (!badBody) console.error(err);
+  res.status(badBody ? 400 : 500).json({ error: badBody ? 'The request could not be read.' : 'Something went wrong on the server.' });
+});
 
 app.listen(PORT, () => console.log(`CampusConnect running at http://localhost:${PORT}`));

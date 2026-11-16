@@ -10,10 +10,13 @@ A full-stack website where students discover college events, workshops and compe
 - **Standout:** monthly event calendar + registration confirmation screen (ticket with unique ID, add-to-calendar `.ics`, print)
 - **Accounts:** sign up / log in (passwords hashed with scrypt, signed HttpOnly session cookie)
 - **Profile page:** one place for your *Registered* tickets, the events you *Created* (edit, delete, attendee list + CSV), and your *Details*
-- Registering for or creating an event requires an account; browsing stays public
+- **Two account types, chosen at sign-up:** *Students* register for events and hold tickets; *Organizers* (clubs, committees, departments) create and manage events. Browsing stays public
 - Calendar can be filtered to *All events*, *My registrations* or *Created by me* (✓ / ★ markers); cards show "Registered ✓"
 - Event time is chosen with hour / minute / AM-PM dropdowns; events in the past cannot be created
 - Past events are marked and closed for registration
+- Hero shows the next event as big ticking digits plus a glowing 7-day timeline
+- Registration tears a ticket stub off, flies it to **My tickets** in the nav, and the ticket carries a QR code
+- Holographic tilt-and-foil event cards (mouse only) and one-dot-per-seat availability
 - Live countdown timers on every event
 - Dark mode, responsive layout
 
@@ -42,10 +45,10 @@ npm start
 | GET | /api/events?q=&category=&from=&to=&sort=&availableOnly= | public | List / search / filter events |
 | GET | /api/events/:id | public | Single event with seats left |
 | GET | /api/categories, /api/stats | public | Filter chips, banner totals |
-| POST | /api/events | Auth | Create event (you become the owner) |
+| POST | /api/events | Organizer | Create event (you become the owner) |
 | PATCH / DELETE | /api/events/:id | Owner | Edit / delete event |
 | GET | /api/events/:id/attendees | Owner | Who registered |
-| POST | /api/events/:id/register | Auth | Register (validated; 409 if full, past or duplicate) |
+| POST | /api/events/:id/register | Student | Register (validated; 409 if full, past or duplicate) |
 | GET | /api/me/registrations | Auth | My tickets |
 | GET | /api/me/events | Auth | Events I created |
 | GET / DELETE | /api/registrations/:id | Owner | View ticket / cancel |
@@ -60,3 +63,6 @@ campusconnect/
   data/events.json (committed seed data); registrations.json, users.json, .secret are created at runtime and git-ignored
   public/index.html, style.css, app.js
 ```
+
+## Credits
+QR codes: `public/qr.js` is [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) by Kazuhiko Arase (MIT).
