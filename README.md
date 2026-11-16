@@ -14,6 +14,7 @@ A full-stack website where students discover college events, workshops and compe
 - Calendar can be filtered to *All events*, *My registrations* or *Created by me* (✓ / ★ markers); cards show "Registered ✓"
 - Event time is chosen with hour / minute / AM-PM dropdowns; events in the past cannot be created
 - Past events are marked and closed for registration
+- **Homepage** (`#/home`) eases visitors in: hero with floating tickets, this-week scroller, category tiles, how-it-works, student/organizer pitch. Students see their next ticket; organizers see their events. `#/events` is the browse page
 - Hero shows the next event as big ticking digits plus a glowing 7-day timeline
 - Registration tears a ticket stub off, flies it to **My tickets** in the nav, and the ticket carries a QR code
 - Holographic tilt-and-foil event cards (mouse only) and one-dot-per-seat availability

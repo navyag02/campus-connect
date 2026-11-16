@@ -123,7 +123,7 @@ async function getMine() {
   return out;
 }
 function setActiveNav() {
-  const cur = (location.hash.replace(/^#\/?/, '') || 'events').split('/')[0];
+  const cur = (location.hash.replace(/^#\/?/, '') || 'home').split('/')[0];
   document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === cur));
 }
 function setWallet(n) {
@@ -147,7 +147,7 @@ function renderNav() {
     e.preventDefault();
     try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
     state.user = null; state.pending = null; state.calFilter = 'all'; renderNav(); toast('Logged out');
-    if (location.hash === '#/events') route(); else location.hash = '#/events';
+    if (location.hash === '#/home') route(); else location.hash = '#/home';
   };
   setActiveNav();
 }
@@ -157,12 +157,12 @@ function sessionExpired(pending) { state.user = null; renderNav(); needLogin(pen
 function afterAuth() {
   const p = state.pending; state.pending = null;
   if (p && p.type === 'register') { location.hash = '#/events'; setTimeout(() => openRegister(p.id), 200); }
-  else location.hash = (p && p.hash) || '#/events';
+  else location.hash = (p && p.hash) || '#/home';
 }
 
 // ---------- router ----------
 async function route() {
-  const hash = location.hash.replace(/^#\/?/, '') || 'events';
+  const hash = location.hash.replace(/^#\/?/, '') || 'home';
   const keepY = hash === lastHash ? window.scrollY : 0;
   lastHash = hash;
   setActiveNav();
@@ -175,7 +175,8 @@ async function route() {
     else if (hash.startsWith('login')) renderLogin();
     else if (hash.startsWith('signup')) renderSignup();
     else if (hash.startsWith('add')) renderAddEvent();
-    else await renderEvents();
+    else if (hash.startsWith('events')) await renderEvents();
+    else await renderHome();
   } catch (e) {
     app.innerHTML = `<div class="empty">Could not load data: ${esc(e.message)}<br>Is the server running?</div>`;
   }
@@ -217,25 +218,166 @@ function eventCard(e, { reg = false, owned = false } = {}) {
   </article>`;
 }
 
-async function renderEvents() {
-  const [cats, all, mine] = await Promise.all([api('/api/categories'), api('/api/events'), getMine()]);
-  const next = all.find(e => !e.past);
+// ---------- home ----------
+const CAT_EMOJI = { Workshop: '🛠️', Competition: '🏆', Cultural: '🎭', Sports: '⚽', Seminar: '🎤' };
+const qrSafe = t => { try { return qrSvg(t); } catch { return ''; } };
+function digitsFor(ev, label) {
+  return `<div class="next"><div class="next-label">${label}: <b>${esc(ev.emoji)} ${esc(ev.title)}</b></div>
+    <div class="digits" data-big data-date="${esc(ev.date)}" data-time="${esc(ev.time)}" role="timer" aria-label="Time until ${esc(ev.title)}">${['days', 'hrs', 'min', 'sec'].map(l => `<div class="dg"><b>00</b><span>${l}</span></div>`).join('')}</div></div>`;
+}
+function weekStrip(all) {
   const base = new Date(todayISO() + 'T00:00:00Z');
-  const week = Array.from({ length: 7 }, (_, i) => {
+  return `<div class="week" aria-label="Events this week">${Array.from({ length: 7 }, (_, i) => {
     const d = new Date(base.getTime() + i * 864e5), iso = d.toISOString().slice(0, 10);
     const evs = all.filter(e => e.date === iso && !e.past);
     return `<div class="wd ${i === 0 ? 'today' : ''}"><small>${i === 0 ? 'Today' : d.toLocaleDateString('en-IN', { weekday: 'short', timeZone: 'UTC' })}</small><b>${d.getUTCDate()}</b><div class="wdots">${evs.slice(0, 4).map(e => `<button type="button" class="wdot" style="--c:var(--${esc(e.category)})" data-ev="${e.id}" title="${esc(e.title)}" aria-label="${esc(e.title)}"></button>`).join('')}${evs.length > 4 ? `<small>+${evs.length - 4}</small>` : ''}</div></div>`;
-  }).join('');
-  app.innerHTML = `
-    <section class="hero">
-      <h1>Find your next<br>campus event.</h1>
-      <p>Workshops, competitions and fests. Pick one, get a ticket in seconds.</p>
-      <div class="next">
-        ${next ? `<div class="next-label">Next up: <b>${esc(next.emoji)} ${esc(next.title)}</b></div>
-        <div class="digits" data-big data-date="${esc(next.date)}" data-time="${esc(next.time)}" role="timer" aria-label="Time until ${esc(next.title)}">${['days', 'hrs', 'min', 'sec'].map(l => `<div class="dg"><b>00</b><span>${l}</span></div>`).join('')}</div>` : '<div class="next-label">No upcoming events yet. Check back soon.</div>'}
+  }).join('')}</div>`;
+}
+function wireCards(root) {
+  root.querySelectorAll('[data-register]').forEach(b => b.onclick = () => openRegister(Number(b.dataset.register)));
+  root.querySelectorAll('[data-details]').forEach(b => b.onclick = () => openDetails(Number(b.dataset.details)));
+  root.querySelectorAll('[data-manage]').forEach(b => b.onclick = () => { state.profileTab = 'created'; location.hash = '#/profile'; });
+}
+// sections fade up as they scroll into view; the sample ticket tears when it appears
+function observeReveals() {
+  const els = app.querySelectorAll('.reveal');
+  const show = el => { el.classList.add('in'); const t = el.querySelector('.tix.demo'); if (t) t.classList.add('fresh'); };
+  if (!('IntersectionObserver' in window)) { els.forEach(show); return; }
+  const io = new IntersectionObserver(list => list.forEach(en => { if (en.isIntersecting) { show(en.target); io.unobserve(en.target); } }), { threshold: .2 });
+  els.forEach(el => io.observe(el));
+}
+// "How it works": a tall section with a sticky stage. Scroll progress builds the ticket piece by piece, then tears the stub.
+function initHow() {
+  const sec = app.querySelector('.how'); if (!sec) return;
+  const steps = [...sec.querySelectorAll('.hs')];
+  const cl = x => Math.max(0, Math.min(1, x));
+  const put = (k, v) => sec.style.setProperty(k, (+v).toFixed(3));
+  const apply = (v, step) => {
+    Object.entries(v).forEach(([k, x]) => put('--' + k, x));
+    steps.forEach((li, i) => { li.classList.toggle('on', i + 1 === step); li.classList.toggle('past', i + 1 < step); });
+    sec.classList.toggle('registered', v.s2 >= .98);
+  };
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    sec.classList.add('static'); apply({ s1: 1, s2: 1, qr: 1, stub: 1, tear: 0, p: 1 }, 3); return;
+  }
+  const update = p => {
+    const s3 = cl((p - .6) / .4);
+    apply({ s1: cl(p / .28), s2: cl((p - .3) / .28), qr: cl(s3 / .5), stub: cl((s3 - .35) / .3), tear: cl((s3 - .75) / .25), p }, p < .3 ? 1 : p < .6 ? 2 : 3);
+  };
+  let queued = false;
+  const onScroll = () => {
+    if (queued) return; queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      if (!sec.isConnected) { window.removeEventListener('scroll', onScroll); return; }
+      const range = sec.offsetHeight - window.innerHeight;
+      update(range > 0 ? cl(-sec.getBoundingClientRect().top / range) : 1);
+    });
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  update(0); onScroll();
+}
+async function renderHome() {
+  const [cats, all, mine] = await Promise.all([api('/api/categories'), api('/api/events'), getMine()]);
+  const u = state.user, org = isOrg();
+  let regs = [], made = [];
+  if (u) { try { if (org) made = await api('/api/me/events'); else regs = await api('/api/me/registrations'); } catch {} }
+  const upcoming = all.filter(e => !e.past), nextEv = upcoming[0];
+  const first = u ? esc(u.name.split(' ')[0]) : '';
+  const t0 = new Date(todayISO() + 'T00:00:00Z').getTime();
+  const thisWeek = upcoming.filter(e => { const t = new Date(e.date + 'T00:00:00Z').getTime(); return t >= t0 && t < t0 + 7 * 864e5; });
+  const nextReg = regs.filter(r => !r.event.past).sort((a, b) => startOf(a.event) - startOf(b.event))[0];
+  const mineUp = made.filter(e => !e.past);
+  const card = e => eventCard(e, { reg: mine.reg.has(e.id), owned: mine.created.has(e.id) });
+
+  let hero;
+  if (!u) {
+    hero = `<section class="hero home-hero">
+      <div class="floaters" aria-hidden="true">${upcoming.slice(0, 3).map((e, i) => `<div class="ft" style="--c:var(--${esc(e.category)});--d:${[60, 100, 40][i]};--rot:${[-7, 5, -3][i]}deg"><b>${esc(e.emoji)}</b><span>${esc(e.title)}</span><small>${esc(fmtDate(e))}</small></div>`).join('')}</div>
+      <div class="eyebrow">Your college, live</div>
+      <h1>Every campus event.<br>One ticket away.</h1>
+      <p class="lead">Workshops, competitions and fests in one place. Find something, register in seconds, and walk in with a QR code.</p>
+      <div class="cta-row"><a class="btn big light" href="#/events">Browse events</a><a class="btn big ghost" href="#/signup">Create account</a></div>
+      ${nextEv ? digitsFor(nextEv, 'Next up') : '<p class="lead">No events are scheduled yet. Check back soon.</p>'}
+      ${weekStrip(all)}</section>`;
+  } else if (org) {
+    const seats = mineUp.reduce((n, e) => n + e.registered, 0);
+    hero = `<section class="hero home-hero"><div class="eyebrow">Organizer dashboard</div><h1>Hi, ${first}.</h1>
+      <p class="lead">${mineUp.length} upcoming event${mineUp.length === 1 ? '' : 's'} · ${seats} registration${seats === 1 ? '' : 's'} so far.</p>
+      <div class="cta-row"><a class="btn big light" href="#/add">Create event</a><button class="btn big ghost" id="hManage">Manage my events</button></div>
+      ${weekStrip(all)}</section>`;
+  } else {
+    hero = `<section class="hero home-hero"><div class="eyebrow">Welcome back</div><h1>Hi, ${first}.</h1>
+      ${nextReg
+        ? `<div class="mytix">${digitsFor(nextReg.event, 'Your next ticket')}<div class="qrmini">${qrSafe(`CAMPUSCONNECT|${nextReg.id}|${nextReg.event.id}`)}<span>${esc(nextReg.id)}</span></div></div>
+           <div class="cta-row"><button class="btn big light" id="hViewTix">View ticket</button><a class="btn big ghost" href="#/events">Browse events</a></div>`
+        : `<p class="lead">You have no upcoming tickets yet.${nextEv ? ' Here is what is coming up.' : ''}</p>${nextEv ? digitsFor(nextEv, 'Next up') : ''}
+           <div class="cta-row"><a class="btn big light" href="#/events">Browse events</a></div>`}
+      ${weekStrip(all)}</section>`;
+  }
+
+  const demo = nextEv || { category: 'Workshop', emoji: '🎟️', title: 'Sample event' };
+  const dm = nextEv || { category: 'Workshop', emoji: '🎟️', title: 'Sample event', date: todayISO(), time: '10:00', venue: 'Main Hall' };
+  const how = `<section class="how" id="how" aria-label="How it works"><div class="how-stick">
+    <div class="how-left"><h2>How it works</h2>
+      <ol class="how-steps">
+        <li class="hs"><span class="sn">1</span><div><h3>Discover</h3><p>Search by category, date or club, or browse the calendar, and pick an event.</p></div></li>
+        <li class="hs"><span class="sn">2</span><div><h3>Register</h3><p>Confirm your details once. Seats and duplicates are checked for you.</p></div></li>
+        <li class="hs"><span class="sn">3</span><div><h3>Show your QR</h3><p>Your ticket arrives with a QR code and is kept in My tickets.</p></div></li>
+      </ol>
+      <div class="how-bar"><i></i></div></div>
+    <div class="how-stage" style="--c:var(--${esc(dm.category)})">
+      <div class="tix hx">
+        <div class="tix-main">
+          <div class="tix-info">
+            <h3 class="hx-title">${esc(dm.emoji)} ${esc(dm.title)}</h3>
+            <div class="hxr a"><span>When</span><b>${esc(fmtDate(dm))}</b></div>
+            <div class="hxr a"><span>Venue</span><b>${esc(dm.venue)}</b></div>
+            <div class="hxr b" style="--i:0"><span>Name</span><b>Aman Roy</b></div>
+            <div class="hxr b" style="--i:1"><span>Roll No.</span><b>21CS1042</b></div>
+          </div>
+          <div class="qr">${qrSafe('CAMPUSCONNECT|SAMPLE')}<span>CC-SAMPLE</span></div>
+        </div>
+        <div class="tix-stub"><b>ADMIT ONE</b><span>SAMPLE</span></div>
       </div>
-      <div class="week" aria-label="Events this week">${week}</div>
-    </section>
+      <div class="hx-btn"><span class="t1">Register</span><span class="t2">Registered ✓</span></div>
+    </div></div></section>`;
+  const split = `<section class="sec reveal split">
+    <div class="pcard stu"><h3>For students</h3><ul><li>Search every event in one place</li><li>Register in seconds and get a QR ticket</li><li>Add events to your calendar</li><li>Cancel any time</li></ul><a class="btn" href="#/signup/student">Join as a student</a></div>
+    <div class="pcard org"><h3>For organizers</h3><ul><li>Publish events for your club or department</li><li>Set seat limits and see who registered</li><li>Download the attendee list as CSV</li><li>Edit or cancel whenever plans change</li></ul><a class="btn" href="#/signup/organizer">Join as an organizer</a></div>
+  </section>`;
+  const cta = `<section class="cta-band reveal"><h2>Your next event is a tap away.</h2><div class="cta-row"><a class="btn big light" href="#/events">Browse events</a><a class="btn big ghost" href="#/signup">Create account</a></div></section>`;
+
+  app.innerHTML = hero + [
+    org && mineUp.length ? `<section class="sec reveal"><div class="sec-head"><h2>Your upcoming events</h2><a href="#/profile" id="hAll">See all</a></div><div class="grid">${mineUp.slice(0, 3).map(card).join('')}</div></section>` : '',
+    thisWeek.length ? `<section class="sec reveal"><div class="sec-head"><h2>This week on campus</h2><a href="#/events">See all events</a></div><div class="hscroll">${thisWeek.map(card).join('')}</div></section>` : '',
+    `<section class="sec reveal"><div class="sec-head"><h2>Find your thing</h2></div><div class="tiles">${cats.map(c => `<button type="button" class="tile" data-cat="${esc(c)}" style="--c:var(--${esc(c)})"><span class="te">${CAT_EMOJI[c] || '🎫'}</span><b>${esc(c)}</b><small>${upcoming.filter(e => e.category === c).length} upcoming</small></button>`).join('')}</div></section>`,
+    how + (!u ? split + cta : '')
+  ].join('');
+
+  startCountdowns(); wireCards(app); observeReveals(); initHow();
+  app.querySelectorAll('.wdot').forEach(b => b.onclick = () => openDetails(Number(b.dataset.ev)));
+  app.querySelectorAll('.tile').forEach(t => t.onclick = () => { state.category = t.dataset.cat; state.q = ''; location.hash = '#/events'; });
+  const vt = document.getElementById('hViewTix');
+  if (vt) vt.onclick = async () => { try { const out = await api('/api/registrations/' + nextReg.id); showConfirmation(out.registration, out.event); } catch (e) { toast(e.message); } };
+  const hm = document.getElementById('hManage');
+  if (hm) hm.onclick = () => { state.profileTab = 'created'; location.hash = '#/profile'; };
+  const ha = document.getElementById('hAll');
+  if (ha) ha.onclick = () => { state.profileTab = 'created'; };
+  const hh = app.querySelector('.floaters') && app.querySelector('.home-hero');
+  if (hh && matchMedia('(hover: hover) and (pointer: fine)').matches && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    hh.addEventListener('pointermove', ev => {
+      const r = hh.getBoundingClientRect();
+      hh.style.setProperty('--px', ((ev.clientX - r.left) / r.width - .5).toFixed(3));
+      hh.style.setProperty('--py', ((ev.clientY - r.top) / r.height - .5).toFixed(3));
+    });
+  }
+}
+
+async function renderEvents() {
+  const [cats, mine] = await Promise.all([api('/api/categories'), getMine()]);
+  app.innerHTML = `
+    <div class="pagehead"><h1>Events</h1><p>Search, filter and register for what is coming up.</p></div>
     <div class="filters">
       <input id="fq" aria-label="Search events" type="search" placeholder="Search events, venues, clubs..." value="${esc(state.q)}">
       <input id="ffrom" type="date" title="From date" value="${state.from}">
@@ -246,7 +388,6 @@ async function renderEvents() {
     <div class="chips" id="chips">${['All', ...cats].map(c => `<button class="chip ${state.category === c ? 'active' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
     <div id="results" class="grid"></div>`;
   document.getElementById('fsort').value = state.sort;
-  app.querySelectorAll('.wdot').forEach(b => b.onclick = () => openDetails(Number(b.dataset.ev)));
 
   let reqId = 0;
   const load = async () => {
@@ -487,11 +628,12 @@ function renderLogin() {
 
 function renderSignup() {
   if (state.user) { location.hash = '#/profile'; return; }
+  const pre = /organizer/.test(location.hash) ? 'organizer' : 'student';
   const ROLES = [['student', 'Student', 'Find events and register for them.'], ['organizer', 'Organizer', 'Create and manage events for a club or department.']];
   app.innerHTML = `<div class="panel auth-card"><h2>Create your account</h2>
     ${state.pending ? '<p class="hint">Sign up to continue where you left off.</p>' : ''}
     <form id="signupForm" novalidate>
-      <div class="roles" role="radiogroup" aria-label="Account type">${ROLES.map(([k, t, d], i) => `<label class="role"><input type="radio" name="role" value="${k}" ${i === 0 ? 'checked' : ''}><span><b>${t}</b><small>${d}</small></span></label>`).join('')}</div>
+      <div class="roles" role="radiogroup" aria-label="Account type">${ROLES.map(([k, t, d], i) => `<label class="role"><input type="radio" name="role" value="${k}" ${k === pre ? 'checked' : ''}><span><b>${t}</b><small>${d}</small></span></label>`).join('')}</div>
       ${fld('name', 'Full name', 'text', '', 'e.g. Aarav Sharma')}
       ${fld('email', 'Email', 'email', '', 'you@college.edu', 'autocomplete="email"')}
       ${fld('password', 'Password', 'password', '', '', 'autocomplete="new-password"')}
@@ -721,7 +863,7 @@ if (matchMedia('(hover: hover) and (pointer: fine)').matches && !matchMedia('(pr
   let hot = null;
   const calm = c => { if (!c) return; c.classList.remove('tilt'); c.style.removeProperty('--rx'); c.style.removeProperty('--ry'); };
   document.addEventListener('pointermove', ev => {
-    const c = ev.target.closest ? ev.target.closest('.card') : null;
+    const c = ev.target.closest ? ev.target.closest('.card, .tile') : null;
     if (hot && hot !== c) { calm(hot); hot = null; }
     if (!c || c.classList.contains('past')) return;
     if (!c.querySelector('.foil')) c.insertAdjacentHTML('beforeend', '<i class="foil" aria-hidden="true"></i>');
