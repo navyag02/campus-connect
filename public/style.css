@@ -449,3 +449,11 @@ button.pill{border:0;font-family:inherit;width:100%;text-align:left;line-height:
   .how-stage{gap:14px;justify-content:flex-start}
 }
 .how{overflow-x:clip}
+/* attendance */
+.checkin{display:flex;gap:8px;margin:10px 0 4px}
+.checkin input{flex:1;min-width:0;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:inherit;font:inherit}
+.checkin .btn{flex:none}
+.ck-msg{min-height:1.2em;margin:4px 0 0;font-size:.85rem;font-weight:600}
+.ck-msg.ok{color:#12a36a}.ck-msg.bad{color:#d6334a}
+.tbl tr.here td{background:rgba(18,163,106,.08)}
+.presbox input{width:18px;height:18px;accent-color:#12a36a;cursor:pointer}

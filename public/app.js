@@ -564,7 +564,7 @@ function flyStub() {
 function showConfirmation(reg, e, fresh = false) {
   let qr = ''; try { qr = qrSvg(`CAMPUSCONNECT|${reg.id}|${e.id}`); } catch {}
   showModal(`<div class="confirm">
-    <div class="tick">✓</div>
+    <div class="presbox">✓</div>
     <h2>${fresh ? "You're registered!" : 'Your ticket'}</h2>
     <p class="note">Show the QR code at the door. A copy is kept in <b>My tickets</b>.</p>
     <div class="tix ${fresh ? 'fresh' : ''}" style="--c:var(--${esc(e.category)})">
@@ -772,15 +772,40 @@ function drawDetails(box) {
 async function openAttendees(e) {
   let list;
   try { list = await api(`/api/events/${e.id}/attendees`); } catch (err) { toast(err.message); return; }
-  const rows = list.map(a => `<tr><td>${esc(a.name)}</td><td>${esc(a.rollNo)}</td><td>${esc(a.email)}</td><td>${esc(a.phone)}</td><td>${esc(a.department)}</td><td>${esc(a.year)}</td></tr>`).join('');
-  showModal(`<h2>Attendees <span class="pill-note">${list.length} of ${e.capacity}</span></h2><p class="meta">${esc(e.title)}</p>
-    ${list.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Name</th><th>Roll no.</th><th>Email</th><th>Mobile</th><th>Dept</th><th>Year</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No registrations yet.</div>'}
+  const present = () => list.filter(a => a.attended).length;
+  const rows = () => list.map(a => `<tr class="${a.attended ? 'here' : ''}"><td><label class="presbox"><input type="checkbox" data-reg="${esc(a.id)}" ${a.attended ? 'checked' : ''} aria-label="Mark ${esc(a.name)} present"><span></span></label></td><td>${esc(a.name)}</td><td>${esc(a.rollNo)}</td><td>${esc(a.id)}</td><td>${esc(a.department)}</td><td>${esc(a.year)}</td><td>${esc(a.phone)}</td></tr>`).join('');
+  showModal(`<h2>Attendees <span class="pill-note">${list.length} of ${e.capacity}</span> <span class="pill-note" id="pres"></span></h2><p class="meta">${esc(e.title)}</p>
+    ${list.length ? `<form class="checkin" id="ckForm"><input id="ckCode" placeholder="Check in: type or scan a ticket ID" autocomplete="off" aria-label="Ticket ID"><button class="btn" type="submit">Check in</button></form><p class="ck-msg" id="ckMsg" role="status"></p>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Present</th><th>Name</th><th>Roll no.</th><th>Ticket</th><th>Dept</th><th>Year</th><th>Mobile</th></tr></thead><tbody id="aBody">${rows()}</tbody></table></div>` : '<div class="empty">No registrations yet.</div>'}
     <div class="row end">${list.length ? '<button class="btn secondary" id="csv">⬇ Download CSV</button>' : ''}<button class="btn" id="aClose">Close</button></div>`, 'wide');
+  const pres = document.getElementById('pres'), body = document.getElementById('aBody'), msg = document.getElementById('ckMsg');
+  const refresh = () => { if (pres) pres.textContent = `${present()} present`; if (body) body.innerHTML = rows(); };
+  const say = (t, ok) => { msg.textContent = t; msg.className = 'ck-msg ' + (ok ? 'ok' : 'bad'); };
+  refresh();
   document.getElementById('aClose').onclick = closeModal;
+  if (body) body.onchange = async ev => {
+    const box = ev.target.closest('input[data-reg]'); if (!box) return;
+    const a = list.find(x => x.id === box.dataset.reg);
+    try {
+      const r = await api(`/api/events/${e.id}/attendance/${encodeURIComponent(a.id)}`, json('PATCH', { attended: box.checked }));
+      a.attended = r.attended; a.attendedAt = r.attendedAt; refresh();
+    } catch (err) { box.checked = !box.checked; say(err.message, false); }
+  };
+  const form = document.getElementById('ckForm');
+  if (form) form.onsubmit = async ev => {
+    ev.preventDefault();
+    const input = document.getElementById('ckCode'), code = input.value.trim(); if (!code) return;
+    try {
+      const r = await api(`/api/events/${e.id}/checkin`, json('POST', { code }));
+      const a = list.find(x => x.id === r.id); if (a) { a.attended = true; a.attendedAt = r.attendedAt; }
+      refresh(); say(`✓ ${r.name} checked in`, true); input.value = '';
+    } catch (err) { say(err.message, false); }
+    input.focus();
+  };
   const csvBtn = document.getElementById('csv');
   if (csvBtn) csvBtn.onclick = () => {
     const q = v => { let t = String(v ?? ''); if (/^[=+\-@]/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; }; // blocks spreadsheet formula injection
-    const csv = [['Name', 'Roll no', 'Email', 'Mobile', 'Department', 'Year', 'Ticket ID'], ...list.map(a => [a.name, a.rollNo, a.email, a.phone, a.department, a.year, a.id])].map(r => r.map(q).join(',')).join('\r\n');
+    const csv = [['Name', 'Roll no', 'Email', 'Mobile', 'Department', 'Year', 'Ticket ID', 'Attended'], ...list.map(a => [a.name, a.rollNo, a.email, a.phone, a.department, a.year, a.id, a.attended ? 'Yes' : 'No'])].map(r => r.map(q).join(',')).join('\r\n');
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     link.download = `attendees-${e.id}.csv`; link.click();

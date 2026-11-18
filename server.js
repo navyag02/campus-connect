@@ -310,8 +310,44 @@ app.delete('/api/events/:id', requireAuth, (req, res) => {
 app.get('/api/events/:id/attendees', requireAuth, (req, res) => {
   const found = ownedEvent(req, res); if (!found) return;
   const list = getRegs().filter(r => r.eventId === found.ev.id && r.status === 'confirmed')
-    .map(({ id, name, email, rollNo, phone, department, year, registeredAt }) => ({ id, name, email, rollNo, phone, department, year, registeredAt }));
+    .map(({ id, name, email, rollNo, phone, department, year, registeredAt, attended, attendedAt }) => ({ id, name, email, rollNo, phone, department, year, registeredAt, attended: !!attended, attendedAt: attendedAt || null }));
   res.json(list);
+});
+
+// ---------- ATTENDANCE (event owner only) ----------
+// Attendance can be marked from 2 hours before the event starts (so nobody is ticked present by mistake days early).
+const ATTENDANCE_OPENS_MS = 2 * 60 * 60 * 1000;
+function setAttendance(res, ev, regs, reg, attended) {
+  if (new Date(`${ev.date}T${ev.time}:00+05:30`) - Date.now() > ATTENDANCE_OPENS_MS)
+    return res.status(409).json({ error: 'Attendance opens 2 hours before the event starts.' });
+  reg.attended = attended;
+  if (attended) reg.attendedAt = new Date().toISOString(); else delete reg.attendedAt;
+  writeJSON(REG_FILE, regs);
+  return res.json({ id: reg.id, name: reg.name, attended: !!reg.attended, attendedAt: reg.attendedAt || null });
+}
+
+// tick / untick one person from the attendee list
+app.patch('/api/events/:id/attendance/:regId', requireAuth, (req, res) => {
+  const found = ownedEvent(req, res); if (!found) return;
+  if (typeof (req.body || {}).attended !== 'boolean') return res.status(400).json({ error: 'attended must be true or false.' });
+  const regs = getRegs();
+  const reg = regs.find(r => r.id === req.params.regId && r.eventId === found.ev.id && r.status === 'confirmed');
+  if (!reg) return res.status(404).json({ error: 'Ticket not found for this event.' });
+  setAttendance(res, found.ev, regs, reg, req.body.attended);
+});
+
+// check in by ticket: accepts the ticket ID (CC-3-AB12CD) or the full text a QR scanner reads (CAMPUSCONNECT|CC-3-AB12CD|3)
+app.post('/api/events/:id/checkin', requireAuth, (req, res) => {
+  const found = ownedEvent(req, res); if (!found) return;
+  const raw = String((req.body || {}).code || '').trim();
+  const code = (raw.startsWith('CAMPUSCONNECT|') ? raw.split('|')[1] || '' : raw).toUpperCase();
+  if (!/^CC-\d+-[A-F0-9]{6}$/.test(code)) return res.status(400).json({ error: 'That does not look like a CampusConnect ticket ID.' });
+  const regs = getRegs();
+  const reg = regs.find(r => r.id === code);
+  if (!reg || reg.status !== 'confirmed') return res.status(404).json({ error: 'No valid ticket with that ID.' });
+  if (reg.eventId !== found.ev.id) return res.status(409).json({ error: 'This ticket is for a different event.' });
+  if (reg.attended) return res.status(409).json({ error: `${reg.name} is already checked in.`, name: reg.name });
+  setAttendance(res, found.ev, regs, reg, true);
 });
 
 // ---------- REGISTRATION (logged-in) ----------
